@@ -1,6 +1,7 @@
 import { BroadcastChannel } from "broadcast-channel";
 import type { BroadcastChannelOptions } from "broadcast-channel";
 import type { QueryClient } from "@tanstack/query-core";
+import { isEqual } from "lodash";
 
 interface BroadcastQueryClientOptions {
   queryClient: QueryClient;
@@ -54,6 +55,21 @@ export function broadcastQueryClient({
     }
   });
 
+  queryClient.getMutationCache().subscribe((mutationEvent) => {
+    if (transaction) {
+      return;
+    }
+
+    const { mutation, type } = mutationEvent;
+
+    if ((type as string) === "invalidated") {
+      channel.postMessage({
+        type: "invalidated",
+        queryKey: (mutation as any).options.mutationKey,
+      });
+    }
+  });
+
   channel.onmessage = (action) => {
     if (!action?.type) {
       return;
@@ -65,25 +81,28 @@ export function broadcastQueryClient({
       if (type === "updated") {
         const query = queryCache.get(queryHash);
 
-        if (query) {
-          query.setState(state);
-          return;
-        }
+        if (query && query.observers.length > 0) {
+          // TODO: is this worth it?
+          if (!isEqual(query.state.data, state.data)) {
+            query.setState(state);
 
-        queryCache.build(
-          queryClient,
-          {
-            queryKey,
-            queryHash,
-          },
-          state
-        );
+            queryCache.build(
+              queryClient,
+              {
+                queryKey,
+                queryHash,
+              },
+              state
+            );
+          }
+        }
       } else if (type === "removed") {
-        const query = queryCache.get(queryHash);
-
-        if (query) {
-          queryCache.remove(query);
-        }
+        // const query = queryCache.get(queryHash);
+        // if (query) {
+        //   queryCache.remove(query);
+        // }
+      } else if (type === "invalidated") {
+        queryClient.invalidateQueries(queryKey);
       }
     });
   };
